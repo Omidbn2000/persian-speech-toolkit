@@ -1,0 +1,75 @@
+test.*
+# ====================
+# Python & Environment
+# ====================
+venv_3.12/
+venv/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.so
+
+# ====================
+# Audio files (optional - comment out if you want to track small samples)
+# ====================
+audio_sample/
+*.wav
+*.opus
+*.mp3
+*.flac
+*.aac
+*.m4a
+
+# ====================
+# Model files (TOO LARGE - MUST exclude)
+# ====================
+Shenava-Koochik-v1.0
+Shenava-Koochik-v1.0/*.nemo
+*.nemo
+*.pt
+*.pth
+*.ckpt
+*.pb
+*.h5
+*.hdf5
+
+# ====================
+# HuggingFace Cache
+# ====================
+
+Shenava-Koochik-v1.0/.cache/
+.cache/
+*.metadata
+trees/
+*.json
+
+# ====================
+# Output files (DON'T COMMIT transcripts)
+# ====================
+transcripts/
+*.txt
+
+# ====================
+# Generated segments (can be regenerated)
+# ====================
+segments/
+
+# ====================
+# IDE and OS files
+# ====================
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+
+# ====================
+# Project specific
+# ====================
+tree.txt
+*.log
+*.tmp
+*.temp
