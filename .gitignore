@@ -4,6 +4,8 @@ test.*
 # ====================
 venv_3.12/
 venv/
+venv_tts/          # Added your TTS virtual environment
+
 __pycache__/
 *.pyc
 *.pyo
@@ -35,9 +37,17 @@ Shenava-Koochik-v1.0/*.nemo
 *.hdf5
 
 # ====================
+# Piper TTS specific
+# ====================
+Mana-Persian-Piper/ckpt/          # Checkpoint files (large training artifacts)
+Mana-Persian-Piper/piper/espeak-ng-data/  # Large espeak binary data
+Mana-Persian-Piper/piper/voices/           # Voice data files
+Mana-Persian-Piper/*.onnx                  # Optional: can be large
+Mana-Persian-Piper/venv_tts/               # If accidentally created inside folder
+
+# ====================
 # HuggingFace Cache
 # ====================
-
 Shenava-Koochik-v1.0/.cache/
 .cache/
 *.metadata
