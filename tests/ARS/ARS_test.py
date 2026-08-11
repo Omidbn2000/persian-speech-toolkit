@@ -2,7 +2,9 @@ import os
 import glob
 import re
 import nemo.collections.asr as nemo_asr
-
+from pathlib import Path
+current = Path(__file__).resolve().parent
+PROJECT_ROOT = current.parent.parent.parent
 # Natural sort function for filenames with numbers
 def natural_sort_key(filename):
     """
@@ -14,9 +16,9 @@ def natural_sort_key(filename):
     return [int(text) if text.isdigit() else text.lower() 
             for text in re.split('([0-9]+)', basename)]
 
-MODEL_PATH = r"C:\Users\sejron\Desktop\Embedded_AI\Phase2\Shenava-Koochik-v1.0\shenava-koochik-1.0.nemo"
-SEGMENTS_FOLDER = r"C:\Users\sejron\Desktop\Embedded_AI\Phase2\segments"
-OUTPUT_FOLDER = r"C:\Users\sejron\Desktop\Embedded_AI\Phase2\transcripts"
+MODEL_PATH = PROJECT_ROOT/ "models/Shenava-Koochik-v1.0/shenava-koochik-1.0.nemo"
+SEGMENTS_FOLDER = r"C:\Users\sejron\Desktop\Embedded_AI\Phase2\scr\test_scripts\VAD\segments"
+OUTPUT_FOLDER = str(current) + "/transcripts"
 
 # Create output folder if it doesn't exist
 os.makedirs(OUTPUT_FOLDER, exist_ok=True)
