@@ -26,6 +26,7 @@ audio_sample/
 # ====================
 # Model files (TOO LARGE - MUST exclude)
 # ====================
+models/
 Shenava-Koochik-v1.0
 Shenava-Koochik-v1.0/*.nemo
 *.nemo
