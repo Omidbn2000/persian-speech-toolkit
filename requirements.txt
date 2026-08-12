@@ -1,0 +1,6 @@
+numpy==2.4.6
+sounddevice==0.5.5
+torch==2.13.0
+onnxruntime==1.28.0
+piper-tts==1.6.0
+silero-vad==6.2.1
