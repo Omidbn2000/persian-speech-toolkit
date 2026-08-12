@@ -53,8 +53,7 @@ Shenava-Koochik-v1.0/.cache/
 .cache/
 *.metadata
 trees/
-*.json
-
+tests/
 # ====================
 # Output files (DON'T COMMIT transcripts)
 # ====================

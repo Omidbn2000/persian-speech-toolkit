@@ -7,12 +7,13 @@ from pathlib import Path
 from collections import deque
 from datetime import datetime
 from ..config import config
+from silero_vad import load_silero_vad
 
 class VADEngine:
     """Real-time Voice Activity Detection"""
     
-    def __init__(self, vad_model):
-        self.model = vad_model
+    def __init__(self):
+        self.model = load_silero_vad()
         self.sample_rate = config.get('vad.sample_rate', 16000)
         self.frame_size = config.get('vad.frame_size', 512)
         self.threshold = config.get('vad.threshold', 0.5)
@@ -125,3 +126,5 @@ class VADEngine:
         
         self.segment_count += 1
         self.speech_buffer = []
+        if config.get("general.debug_vad", False):
+            print(f"\n[VAD] Saved segment {self.segment_count}: {filepath} ({duration:.2f}s)")

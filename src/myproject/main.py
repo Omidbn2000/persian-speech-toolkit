@@ -8,9 +8,6 @@ from collections import deque
 
 import numpy as np
 import sounddevice as sd
-import keyboard
-
-from silero_vad import load_silero_vad
 
 from .tts import TTSEngine
 from .vad import VADEngine
@@ -18,28 +15,20 @@ from .asr import ASREngine
 from .config import config
 
 
-# ================================================================
-# LOADING
-# ================================================================
-
 def show_loading():
     """Load all speech-processing modules."""
     print("\n" + "=" * 60)
     print("  Initializing Speech Processing System")
     print("=" * 60)
 
-    # TTS
     print("  Loading TTS Engine...", end=" ", flush=True)
     tts_engine = TTSEngine()
     print("✓")
 
-    # VAD
     print("  Loading VAD Engine...", end=" ", flush=True)
-    vad_model = load_silero_vad()
-    vad_engine = VADEngine(vad_model)
+    vad_engine = VADEngine()
     print("✓")
 
-    # ASR
     print("  Loading ASR Engine...", end=" ", flush=True)
     asr_engine = ASREngine()
     print("✓")
@@ -51,84 +40,37 @@ def show_loading():
     return tts_engine, vad_engine, asr_engine
 
 
-# ================================================================
-# HELP
-# ================================================================
-
-def show_help():
-    """Display help menu."""
-    print()
-    print("=" * 60)
-    print("  HELP - Available Commands")
-    print("=" * 60)
-    print("  [S]      Toggle automatic speech recognition")
-    print("  [Space]  Pause / Resume")
-    print("  [Q]      Exit")
-    print("=" * 60)
-    print()
-    print("  VAD automatically detects speech.")
-    print("  Just speak normally when S is ON.")
-    print()
-
-
-# ================================================================
-# MAIN LOOP
-# ================================================================
-
 def run_main_loop(tts_engine, vad_engine, asr_engine):
-    """
-    Main real-time speech loop.
-
-    VAD controls segmentation automatically.
-
-    Important architecture:
-
-        Audio callback
-            ↓
-        VAD
-            ↓
-        speech buffer
-            ↓
-        completed segment queue
-            ↓
-        ASR worker
-            ↓
-        transcript
-
-    ASR inference NEVER runs inside the audio callback.
-    """
-    # Configuration
+    """Main real-time speech loop."""
     sample_rate = config.get("vad.sample_rate", 16000)
     block_size = config.get("vad.frame_size", 512)
 
-    # VAD segmentation settings (from config)
     pre_roll_seconds = config.get("segmentation.pre_roll_seconds", 0.30)
     pre_roll_samples = int(pre_roll_seconds * sample_rate)
-
     speech_start_blocks = config.get("segmentation.speech_start_blocks", 2)
     silence_end_blocks = config.get("segmentation.silence_end_blocks", 12)
     minimum_segment_seconds = config.get("segmentation.minimum_segment_seconds", 0.50)
     minimum_segment_samples = int(minimum_segment_seconds * sample_rate)
 
-    # State
-    enabled = True
-    paused = False
+    tts_enabled = config.get("general.tts_enabled", False)
+
     is_speaking = False
     speech_candidate_blocks = 0
     silence_blocks = 0
     segment_count = 0
+    last_transcript = ""
+    transcribing = False
 
-    # Buffers
     pre_roll = deque(maxlen=pre_roll_samples)
     speech_buffer = []
     buffer_lock = threading.Lock()
     completed_segments = queue.Queue()
 
-    # ASR worker state
     worker_running = True
 
     def asr_worker():
-        """Process completed speech segments. Runs outside the sounddevice callback."""
+        nonlocal last_transcript, transcribing
+
         while worker_running:
             try:
                 item = completed_segments.get(timeout=0.1)
@@ -141,63 +83,69 @@ def run_main_loop(tts_engine, vad_engine, asr_engine):
             segment_number, audio = item
             duration = len(audio) / sample_rate
 
-            print(f"\n\n>>> Transcribing segment {segment_number} ({duration:.2f}s)...")
+            transcribing = True
+            # Clear the entire status line fully (150 chars to be safe)
+            print(f"\r{' ' * 150}", end="", flush=True)
+            print(f"\r>>> Transcribing segment {segment_number} ({duration:.2f}s)...", flush=True)
 
             try:
                 result = asr_engine.transcribe(audio, segment_number)
-                print()
-                print("=" * 60)
-                print(f"  RESULT [Segment {segment_number}]")
-                print("=" * 60)
-                print(f"  {result['text']}")
-                print("=" * 60)
+                text = result['text']
+                last_transcript = text
+
+                print(f"============================================================")
+                print(f"  [Segment {segment_number}]:")
+                print(f"  {text}")
+                print(f"============================================================")
+
+                if tts_enabled and text and text != "[EMPTY]" and not text.startswith("[Error"):
+                    print(f"  Speaking...")
+                    try:
+                        tts_engine.speak(text, play=True)
+                    except Exception as e:
+                        print(f"  TTS error: {e}")
+
             except Exception as e:
-                print(f"\n>>> ASR worker error:")
-                print(f"    {type(e).__name__}: {e}")
+                last_transcript = f"[Error]"
+                print(f">>> ASR error: {type(e).__name__}: {e}")
             finally:
                 completed_segments.task_done()
+                transcribing = False
+                print()  # blank line before status bar resumes
 
-    # Start ASR worker
     worker_thread = threading.Thread(target=asr_worker, daemon=True)
     worker_thread.start()
 
-    # AUDIO CALLBACK
     def audio_callback(indata, frames, time_info, status):
         nonlocal is_speaking, speech_candidate_blocks, silence_blocks, speech_buffer, segment_count
+
+        if transcribing:
+            return
 
         if status:
             status_text = str(status)
             if "overflow" not in status_text.lower():
                 print(f"\nAudio status: {status_text}")
 
-        if paused:
-            return
-
         audio = indata[:, 0].astype(np.float32).copy()
 
-        # Amplitude
         rms = float(np.sqrt(np.mean(audio ** 2)))
         level = min(int(rms * 2000), 30)
         amp_bar = "█" * level + "░" * (30 - level)
 
-        # Maintain pre-roll
         pre_roll.extend(audio.tolist())
 
-        # VAD
         try:
             vad_result = vad_engine.process(indata)
             is_speech = bool(vad_result["is_speech"])
             probability = float(vad_result.get("probability", 0.0))
-        except Exception as e:
-            print(f"\nVAD error: {e}")
+        except Exception:
             return
 
-        # VAD display
         vad_level = min(int(probability * 30), 30)
         vad_bar = "█" * vad_level + "░" * (30 - vad_level)
         vad_label = "SPEECH" if is_speech else "SILENCE"
 
-        # SPEECH DETECTION
         if is_speech:
             speech_candidate_blocks += 1
             silence_blocks = 0
@@ -210,7 +158,6 @@ def run_main_loop(tts_engine, vad_engine, asr_engine):
                     speech_buffer.extend(audio.tolist())
             else:
                 speech_buffer.extend(audio.tolist())
-
         else:
             speech_candidate_blocks = 0
 
@@ -227,34 +174,28 @@ def run_main_loop(tts_engine, vad_engine, asr_engine):
 
                     if len(segment_audio) >= minimum_segment_samples:
                         completed_segments.put((segment_count, segment_audio))
-                    else:
-                        print(f"\n>>> Ignored very short segment ({len(segment_audio) / sample_rate:.2f}s)")
-
-        # STATUS
-        if not enabled:
-            system_status = "OFF"
-        elif paused:
-            system_status = "PAUSED"
-        else:
-            system_status = "ON"
 
         if is_speaking:
-            speech_status = "RECORDING"
+            speech_status = "REC"
         elif speech_candidate_blocks > 0:
-            speech_status = "STARTING"
+            speech_status = "START"
         else:
-            speech_status = "WAITING"
+            speech_status = "WAIT"
+
+        tts_status = "TTS:ON" if tts_enabled else "TTS:OFF"
 
         with buffer_lock:
             current_duration = len(speech_buffer) / sample_rate
 
-        print(
-            f"\r  Mic [{amp_bar}] | VAD [{vad_bar}] {vad_label:<7} | {speech_status:<9} | {system_status:<6} | {current_duration:5.1f}s",
-            end="",
-            flush=True
+        status_line = (
+            f"\r  Mic[{amp_bar}] VAD[{vad_bar}] {vad_label} {speech_status} {tts_status} "
+            f"{current_duration:.1f}s Seg:{segment_count} "
         )
+        # Pad generously to wipe any previous longer line
+        status_line = status_line.ljust(150)
 
-    # MICROPHONE
+        print(status_line, end="", flush=True)
+
     print("\nOpening microphone...")
 
     with sd.InputStream(
@@ -264,45 +205,15 @@ def run_main_loop(tts_engine, vad_engine, asr_engine):
         blocksize=block_size,
         dtype="float32"
     ):
-        print("Microphone ready.")
-        print()
-        print("Automatic VAD is ACTIVE.")
-        print("Speak normally.")
-        print("Press [S] to disable/enable recognition.")
+        print("Microphone ready. Speak normally. Press Ctrl+C to exit.")
         print()
 
         try:
             while True:
-                if keyboard.is_pressed("s"):
-                    enabled = not enabled
-                    if not enabled:
-                        is_speaking = False
-                        speech_candidate_blocks = 0
-                        silence_blocks = 0
-                        speech_buffer = []
-                        print("\n\n>>> Automatic speech recognition: OFF")
-                    else:
-                        print("\n\n>>> Automatic speech recognition: ON")
-                    time.sleep(0.35)
-
-                elif keyboard.is_pressed("space"):
-                    paused = not paused
-                    if paused:
-                        print("\n\n>>> Microphone PAUSED")
-                    else:
-                        print("\n\n>>> Microphone RESUMED")
-                    time.sleep(0.35)
-
-                elif keyboard.is_pressed("q"):
-                    print("\n\n>>> Exiting...")
-                    break
-
-                time.sleep(0.05)
-
+                time.sleep(0.1)
         except KeyboardInterrupt:
-            print("\n\n>>> Interrupted.")
+            print("\n\n>>> Exiting...")
 
-    # Cleanup
     worker_running = False
     completed_segments.put(None)
     worker_thread.join(timeout=1.0)
@@ -313,7 +224,6 @@ def main():
     """Application entry point."""
     try:
         tts_engine, vad_engine, asr_engine = show_loading()
-        show_help()
         run_main_loop(tts_engine, vad_engine, asr_engine)
     except Exception as e:
         print("\nError:")

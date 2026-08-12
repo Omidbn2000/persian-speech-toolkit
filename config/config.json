@@ -1,0 +1,42 @@
+{
+    "general": {
+        "debug_asr": false,
+        "debug_vad": false,
+        "debug_main": false,
+        "tts_enabled": true
+    },
+    "model_paths": {
+        "tts_onnx": "models/Mana-Persian-Piper/fa_IR-mana-medium.onnx",
+        "tts_checkpoint": "models/Mana-Persian-Piper/ckpt/epoch=6012-step=4203520.ckpt",
+        "tts_config": "models/Mana-Persian-Piper/ckpt/config.json",
+        "asr_onnx": "models/Shenava-Koochik-v1.0-ONNX-fp16/shenava_koochik_1_0_ctc_fixed2005_len_att70_13_fp16_full_io_embedded.onnx",
+        "asr_tokens": "models/Shenava-Koochik-v1.0-ONNX-fp16/tokens.json",
+        "asr_mel_filters": "models/Shenava-Koochik-v1.0-ONNX-fp16/mel_filters_slaney_80x257.json"
+    },
+    "vad": {
+        "sample_rate": 16000,
+        "frame_size": 512,
+        "threshold": 0.5,
+        "min_speech_frames": 3,
+        "min_silence_frames": 5,
+        "buffer_duration": 1.0,
+        "save_audio": false,
+        "save_dir": "assets/audios/vad_segments",
+        "min_speech_duration": 0.5,
+        "max_silence_duration": 0.1,
+        "audio_format": "wav"
+    },
+    "asr": {
+        "sample_rate": 16000,
+        "buffer_duration": 2.0,
+        "transcripts_dir": "assets/transcripts",
+        "frame_length": 2005,
+        "context_size": [70, 13]
+    },
+    "segmentation": {
+        "pre_roll_seconds": 0.50,
+        "speech_start_blocks": 2,
+        "silence_end_blocks": 12,
+        "minimum_segment_seconds": 0.50
+    }
+}

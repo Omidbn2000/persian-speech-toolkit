@@ -47,19 +47,13 @@ class ASREngine:
         # Inspect model inputs/outputs
         inputs = self.session.get_inputs()
         outputs = self.session.get_outputs()
+        if config.get("general.debug_asr", False):
+            print("\nASR ONNX model:")
+            for inp in inputs:
+                print(f"  INPUT  {inp.name}: {inp.shape} {inp.type}")
+            for out in outputs:
+                print(f"  OUTPUT {out.name}: {out.shape} {out.type}")
 
-        print("\nASR ONNX model:")
-        for inp in inputs:
-            print(f"  INPUT  {inp.name}: {inp.shape} {inp.type}")
-        for out in outputs:
-            print(f"  OUTPUT {out.name}: {out.shape} {out.type}")
-
-        # Expected inputs:
-        # processed_signal
-        # processed_signal_length
-        #
-        # Keep names explicitly because this is the exported
-        # Shenava model we are targeting.
         self.signal_input_name = "processed_signal"
         self.length_input_name = "processed_signal_length"
 
@@ -97,32 +91,30 @@ class ASREngine:
             self.input_dtype = np.float32
 
         # Hann window
-        # preprocessor.json: window = "hann_periodic_false"
         self.window = np.hanning(self.win_length).astype(np.float32)
 
-        # Transcript storage
-        self.transcripts_dir = Path(config.get("asr.transcripts_dir", "transcripts"))
+        # Transcript storage - timestamped directory like VAD
+        base_dir = Path(config.get("asr.transcripts_dir", "assets/transcripts"))
+        self.session_timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        self.transcripts_dir = base_dir / self.session_timestamp
         self.transcripts_dir.mkdir(parents=True, exist_ok=True)
 
-        self.session_timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         self.all_transcripts = []
         self.transcript_summary = []
 
-        print(f"  ASR sample rate: {self.sample_rate}")
-        print(f"  ASR blank ID: {self.blank_id}")
-        print(f"  ASR input dtype: {self.input_dtype}")
-        print("  ASR preprocessing: Shenava/NeMo compatible")
+        if config.get("general.debug_asr", False):
+            print(f"  ASR sample rate: {self.sample_rate}")
+            print(f"  ASR blank ID: {self.blank_id}")
+            print(f"  ASR input dtype: {self.input_dtype}")
+            print(f"  Transcripts dir: {self.transcripts_dir}")
+            print("  ASR preprocessing: Shenava/NeMo compatible")
 
     # =============================================================
     # AUDIO PREPROCESSING
     # =============================================================
 
     def _apply_preemphasis(self, audio: np.ndarray) -> np.ndarray:
-        """
-        Apply NeMo-compatible preemphasis.
-
-        y[n] = x[n] - 0.97 * x[n-1]
-        """
+        """Apply NeMo-compatible preemphasis."""
         if len(audio) <= 1:
             return audio
 
@@ -132,32 +124,19 @@ class ASREngine:
         return output
 
     def _compute_mel(self, audio: np.ndarray):
-        """
-        Compute mel spectrogram matching the supplied
-        Shenava-Koochik preprocessor configuration.
-
-        Returns:
-            mel: shape [80, actual_frames]
-            actual_frames: number of valid frames before padding
-        """
+        """Compute mel spectrogram matching Shenava-Koochik preprocessor configuration."""
         audio = np.asarray(audio, dtype=np.float32)
 
         if audio.size == 0:
             raise ValueError("Cannot compute mel spectrogram from empty audio.")
 
-        # 1. Preemphasis
         audio = self._apply_preemphasis(audio)
 
-        # 2. Center padding
-        # center = true, center_pad = 256, pad_mode = reflect
         if len(audio) > 1:
             audio = np.pad(audio, (self.center_pad, self.center_pad), mode="reflect")
         else:
             audio = np.pad(audio, (self.center_pad, self.center_pad), mode="constant")
 
-        # 3. Frame count
-        # From preprocessor.json: floor(num_samples / hop_length) + 1
-        # IMPORTANT: num_samples here refers to the original waveform.
         original_num_samples = len(audio) - 2 * self.center_pad
         actual_frames = max(
             1,
@@ -167,10 +146,8 @@ class ASREngine:
             )
         )
 
-        # 4. Allocate mel spectrogram
         mel_spec = np.zeros((self.n_mels, actual_frames), dtype=np.float32)
 
-        # 5. STFT -> power spectrum -> mel
         for frame_index in range(actual_frames):
             start = frame_index * self.hop_length
             frame = audio[start:start + self.win_length]
@@ -183,25 +160,12 @@ class ASREngine:
                     constant_values=0.0
                 )
 
-            # Hann window
             frame = frame * self.window
-
-            # 512-point FFT
             spectrum = np.fft.rfft(frame, n=self.n_fft)
-
-            # Magnitude squared
-            # preprocessor.json: magnitude_power_2_no_fft_normalization
             power = (np.abs(spectrum) ** 2).astype(np.float32)
-
-            # Slaney 80-bin mel filter bank
             mel_spec[:, frame_index] = self.mel_filters @ power
 
-        # 6. Natural logarithm
         mel_spec = np.log(mel_spec + self.log_guard)
-
-        # IMPORTANT: DO NOT perform mean/std normalization.
-        # preprocessor.json: normalize = "NA"
-
         return mel_spec, actual_frames
 
     # =============================================================
@@ -209,15 +173,7 @@ class ASREngine:
     # =============================================================
 
     def _decode_ctc(self, logits: np.ndarray) -> str:
-        """
-        Greedy CTC decoder.
-
-        Rules:
-        - argmax
-        - remove blank
-        - remove repeated tokens
-        - convert SentencePiece ▁ to spaces
-        """
+        """Greedy CTC decoder."""
         token_ids = np.argmax(logits, axis=-1)
         decoded = []
         previous = self.blank_id
@@ -225,23 +181,19 @@ class ASREngine:
         for token_id in token_ids:
             token_id = int(token_id)
 
-            # CTC blank
             if token_id == self.blank_id:
                 previous = token_id
                 continue
 
-            # CTC repeated token
             if token_id == previous:
                 continue
 
-            # Safety check
             if not (0 <= token_id < len(self.tokens)):
                 previous = token_id
                 continue
 
             token = self.tokens[token_id]
 
-            # Ignore SentencePiece special tokens
             if token.startswith("<") and token.endswith(">"):
                 previous = token_id
                 continue
@@ -261,36 +213,30 @@ class ASREngine:
         """Transcribe one complete audio segment."""
         audio_array = np.asarray(audio_data, dtype=np.float32)
 
-        # Empty input
         if audio_array.size == 0:
             return {"text": "[EMPTY]"}
 
-        # Basic audio diagnostics
-        duration = len(audio_array) / self.sample_rate
-        rms = float(np.sqrt(np.mean(audio_array ** 2)))
-
-        print("\n")
-        print("=" * 60)
-        print(f"ASR segment {segment_num}")
-        print("=" * 60)
-        print(f"Audio samples : {len(audio_array)}")
-        print(f"Audio duration: {duration:.3f}s")
-        print(f"Audio min/max : {audio_array.min():.5f} / {audio_array.max():.5f}")
-        print(f"Audio RMS     : {rms:.5f}")
-
-        # IMPORTANT: Do NOT normalize audio here.
-        # sounddevice already gives us float audio.
+        if config.get("general.debug_asr", False):
+            duration = len(audio_array) / self.sample_rate
+            rms = float(np.sqrt(np.mean(audio_array ** 2)))
+            print("\n")
+            print("=" * 60)
+            print(f"ASR segment {segment_num}")
+            print("=" * 60)
+            print(f"Audio samples : {len(audio_array)}")
+            print(f"Audio duration: {duration:.3f}s")
+            print(f"Audio min/max : {audio_array.min():.5f} / {audio_array.max():.5f}")
+            print(f"Audio RMS     : {rms:.5f}")
 
         try:
-            # Mel preprocessing
             mel, actual_frames = self._compute_mel(audio_array)
 
-            print(f"Mel shape     : {mel.shape}")
-            print(f"Actual frames : {actual_frames}")
-            print(f"Mel min/max   : {mel.min():.5f} / {mel.max():.5f}")
-            print(f"Mel mean/std  : {mel.mean():.5f} / {mel.std():.5f}")
+            if config.get("general.debug_asr", False):
+                print(f"Mel shape     : {mel.shape}")
+                print(f"Actual frames : {actual_frames}")
+                print(f"Mel min/max   : {mel.min():.5f} / {mel.max():.5f}")
+                print(f"Mel mean/std  : {mel.mean():.5f} / {mel.std():.5f}")
 
-            # Pad to model's fixed input size
             if mel.shape[1] > self.fixed_frames:
                 mel = mel[:, :self.fixed_frames]
                 actual_frames = self.fixed_frames
@@ -302,18 +248,13 @@ class ASREngine:
                     constant_values=0.0
                 )
 
-            # Add batch dimension
-            # [80, 2005] -> [1, 80, 2005]
             input_tensor = mel[np.newaxis, :, :].astype(self.input_dtype)
-
-            # Actual input length
-            # DO NOT use 2005 here.
             input_length = np.array([actual_frames], dtype=np.int64)
 
-            print(f"ONNX input    : {input_tensor.shape}")
-            print(f"Input length  : {input_length.tolist()}")
+            if config.get("general.debug_asr", False):
+                print(f"ONNX input    : {input_tensor.shape}")
+                print(f"Input length  : {input_length.tolist()}")
 
-            # Run ONNX
             outputs = self.session.run(
                 None,
                 {
@@ -322,33 +263,32 @@ class ASREngine:
                 }
             )
 
-            # Output 0 = logits, Output 1 = encoded_lengths
             logits = outputs[0][0]
             encoded_lengths = outputs[1]
             encoded_length = int(encoded_lengths[0])
 
-            print(f"Logits shape  : {logits.shape}")
-            print(f"Encoded length: {encoded_length}")
+            if config.get("general.debug_asr", False):
+                print(f"Logits shape  : {logits.shape}")
+                print(f"Encoded length: {encoded_length}")
 
-            # Never decode padded output
             usable_steps = min(encoded_length, logits.shape[0])
             logits = logits[:usable_steps]
 
-            # Greedy token IDs
             token_ids = np.argmax(logits, axis=-1)
-            blank_percentage = float(np.mean(token_ids == self.blank_id))
 
-            print(f"Usable steps  : {usable_steps}")
-            print(f"Blank ratio   : {blank_percentage:.2%}")
-            print(f"Token IDs     : {token_ids[:40].tolist()}")
+            if config.get("general.debug_asr", False):
+                blank_percentage = float(np.mean(token_ids == self.blank_id))
+                print(f"Usable steps  : {usable_steps}")
+                print(f"Blank ratio   : {blank_percentage:.2%}")
+                print(f"Token IDs     : {token_ids[:40].tolist()}")
 
-            # Decode
             text = self._decode_ctc(logits)
 
             if not text:
                 text = "[EMPTY]"
 
-            print(f"Transcript    : {text}")
+            if config.get("general.debug_asr", False):
+                print(f"Transcript    : {text}")
 
         except Exception as e:
             text = f"[Error: {type(e).__name__}: {e}]"
@@ -422,5 +362,4 @@ class ASREngine:
         with open(json_path, "w", encoding="utf-8") as f:
             json.dump(json_data, f, ensure_ascii=False, indent=2)
 
-        print("\n")
-        print(f"Transcripts saved to: {self.transcripts_dir}")
+        print(f"\nTranscripts saved to: {self.transcripts_dir}")
